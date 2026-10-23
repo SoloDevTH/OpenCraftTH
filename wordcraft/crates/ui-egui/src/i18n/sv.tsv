@@ -17,7 +17,7 @@
 	(no style)	(ingen stil)
 	(no suggestions)	(inga förslag)
 	1.5 Line Spacing	Radavstånd 1,5
-	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	En gratis ordbehandlare med öppen källkod, skriven från grunden i Rust.\nEn del av Crafting Apps från OpenCraft Studio-teamet.
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	En gratis ordbehandlare med öppen källkod, skriven från grunden i Rust.\nEn del av Crafting Apps från ArtCraft-teamet.
 	About	Om
 	About WordCraft	Om WordCraft
 	Accept	Acceptera
@@ -543,7 +543,7 @@
 	Link to Previous	Länka till föregående
 	Links	Länkar
 	Location: {path}	Plats: {path}
-	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Copyright (c) 2026 OpenCraft Studio-teamet och WordCrafts bidragsgivare.
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft-teamet och WordCrafts bidragsgivare.
 	Macros	Makron
 	Mailings	Utskick
 	Make WordCraft the default for Word documents…	Gör WordCraft till standardprogram för Word-dokument…
