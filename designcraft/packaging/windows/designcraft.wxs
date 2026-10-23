@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DesignCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build designcraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files, a Start Menu shortcut, `.pcraft` owned by DesignCraft,
+  and DesignCraft offered under "Open with" for PSD/PSB and the image formats it reads (without
+  taking over the user's default app for them).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="DesignCraft"
+      Manufacturer="SoloDevTH"
+      Version="$(var.Version)"
+      UpgradeCode="6A3D52A3-D555-4F24-9ED6-AF5AEDB217E0"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="DesignCraft page layout and publishing" Manufacturer="SoloDevTH" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of DesignCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="DesigncraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="DesigncraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/SoloDevTH/OpenCraftTH/tree/main/designcraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/SoloDevTH/OpenCraftTH/tree/main/designcraft" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/SoloDevTH/OpenCraftTH/tree/main/designcraft" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="DesignCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="DesignCraft" Level="1">
+      <ComponentGroupRef Id="DesigncraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="DesigncraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="DesigncraftApp" Guid="205806D7-B1AC-415A-BAEC-31C0E915F97E">
+        <File Id="DesigncraftExe" Source="$(var.BinDir)\designcraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="DesignCraft"
+              Description="DesignCraft page layout and publishing" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="DesigncraftIcon.ico" IconIndex="0" />
+        </File>
+
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\designcraft.exe" Value="[#DesigncraftExe]" Type="string" />
+
+        <!-- File associations: a ProgId, OpenWithProgids and Capabilities (RegisteredApplications),
+             so DesignCraft is offered under Explorer's "Open with" and in Settings › Default apps.
+             .designcraft is DesignCraft's own format, so DesignCraft is its default; IDML's
+             existing default is left alone and the user chooses. -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\DesignCraft.Document" Value="DesignCraft Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\DesignCraft.Document\DefaultIcon" Value="&quot;[#DesigncraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\DesignCraft.Document\shell\open\command" Value="&quot;[#DesigncraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.designcraft" Value="DesignCraft.Document" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\designcraft.exe" Name="FriendlyAppName" Value="DesignCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\designcraft.exe\shell\open\command" Value="&quot;[#DesigncraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\DesignCraft\Capabilities" Name="ApplicationName" Value="DesignCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\DesignCraft\Capabilities" Name="ApplicationDescription" Value="DesignCraft page layout and publishing" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="DesignCraft" Value="Software\DesignCraft\Capabilities" Type="string" />
+        <?foreach Ext in designcraft;idml?>
+        <RegistryValue Root="HKLM" Key="Software\Classes\.$(var.Ext)\OpenWithProgids" Name="DesignCraft.Document" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\designcraft.exe\SupportedTypes" Name=".$(var.Ext)" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\DesignCraft\Capabilities\FileAssociations" Name=".$(var.Ext)" Value="DesignCraft.Document" Type="string" />
+        <?endforeach?>
+      </Component>
+
+      <Component Id="DesigncraftCli">
+        <File Id="DesigncraftCliExe" Source="$(var.BinDir)\designcraft-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

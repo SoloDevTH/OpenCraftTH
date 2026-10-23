@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "filmcraft": {
+      "command": "target/debug/filmcraft-cli",
+      "args": ["mcp", "--bridge", "127.0.0.1:9876", "--control-token-file", "target/filmcraft-control.token"]
+    },
+    "filmcraft-headless": {
+      "command": "target/debug/filmcraft-cli",
+      "args": ["mcp", "--demo", "--automation-read-root", ".", "--automation-write-root", "target"]
+    }
+  }
+}

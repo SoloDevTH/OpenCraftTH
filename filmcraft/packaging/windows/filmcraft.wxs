@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FilmCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+
+    wix build filmcraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+
+  Per-machine install into Program Files and a Start Menu shortcut. No file associations.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="FilmCraft"
+      Manufacturer="SoloDevTH"
+      Version="$(var.Version)"
+      UpgradeCode="BE09000B-9F05-4134-BCA6-F247D0D1478A"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="FilmCraft video editor" Manufacturer="SoloDevTH" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of FilmCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="FilmcraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="FilmcraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/SoloDevTH/OpenCraftTH/tree/main/filmcraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/SoloDevTH/OpenCraftTH/tree/main/filmcraft" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/SoloDevTH/OpenCraftTH/tree/main/filmcraft" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="FilmCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="FilmCraft" Level="1">
+      <ComponentGroupRef Id="FilmcraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="FilmcraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="FilmcraftApp" Guid="FA507703-5BA2-47F2-9D70-43CFBF3A7008">
+        <File Id="FilmcraftExe" Source="$(var.BinDir)\filmcraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="FilmCraft"
+              Description="FilmCraft video editor" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="FilmcraftIcon.ico" IconIndex="0" />
+        </File>
+
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\filmcraft.exe" Value="[#FilmcraftExe]" Type="string" />
+
+        <!-- File associations: ProgIds, OpenWithProgids and Capabilities (RegisteredApplications),
+             so FilmCraft is offered under Explorer's "Open with" and in Settings › Default apps.
+             .fcproj is FilmCraft's own format, so FilmCraft is its default; video files keep
+             their existing default and the user chooses (FilmCraft opens them as media). -->
+        <RegistryValue Root="HKLM" Key="Software\Classes\FilmCraft.Project" Value="FilmCraft Project" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\FilmCraft.Project\DefaultIcon" Value="&quot;[#FilmcraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\FilmCraft.Project\shell\open\command" Value="&quot;[#FilmcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\FilmCraft.Media" Value="Video" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\FilmCraft.Media\DefaultIcon" Value="&quot;[#FilmcraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\FilmCraft.Media\shell\open\command" Value="&quot;[#FilmcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.fcproj" Value="FilmCraft.Project" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.fcproj\OpenWithProgids" Name="FilmCraft.Project" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\filmcraft.exe\SupportedTypes" Name=".fcproj" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\FilmCraft\Capabilities\FileAssociations" Name=".fcproj" Value="FilmCraft.Project" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\filmcraft.exe" Name="FriendlyAppName" Value="FilmCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\filmcraft.exe\shell\open\command" Value="&quot;[#FilmcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\FilmCraft\Capabilities" Name="ApplicationName" Value="FilmCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\FilmCraft\Capabilities" Name="ApplicationDescription" Value="FilmCraft video editor" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="FilmCraft" Value="Software\FilmCraft\Capabilities" Type="string" />
+        <?foreach Ext in mp4;mov;m4v;mkv;webm;m2ts?>
+        <RegistryValue Root="HKLM" Key="Software\Classes\.$(var.Ext)\OpenWithProgids" Name="FilmCraft.Media" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\filmcraft.exe\SupportedTypes" Name=".$(var.Ext)" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\FilmCraft\Capabilities\FileAssociations" Name=".$(var.Ext)" Value="FilmCraft.Media" Type="string" />
+        <?endforeach?>
+      </Component>
+
+      <Component Id="FilmcraftCli">
+        <File Id="FilmcraftCliExe" Source="$(var.BinDir)\filmcraft-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

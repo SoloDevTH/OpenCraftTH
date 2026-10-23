@@ -1,0 +1,34 @@
+# Each app folder also has its own .gitignore (from its original repository).
+
+# Rust build output
+target/
+target-*/
+**/*.rs.bk
+
+# Packaging output: MSIs, portable zips and the one-file installer go to Releases, not git
+dist/
+installer/obj/
+installer/tools/
+*.wixpdb
+*.msi
+*.exe
+
+# Fetched at build time (models, place names, fonts, test corpora)
+pdfcraft/assets/models/
+corpus/
+craft-fonts/
+
+# Maintainer-local notes and tool state
+plan/
+.claude/
+.vscode/
+.idea/
+*.log
+*.tmp
+*.bak
+*~
+
+# Operating systems
+.DS_Store
+Thumbs.db
+desktop.ini

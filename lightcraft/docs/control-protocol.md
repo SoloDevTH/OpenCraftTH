@@ -1,0 +1,272 @@
+# Control protocol
+
+`lightcraft --control 7980` (or `LIGHTCRAFT_CONTROL_PORT=7980`) starts a JSON-lines server on
+`127.0.0.1:7980` (loopback only). One request per line, one reply per line, in order:
+
+```text
+→ {"id": 1, "method": "engine.execute", "params": {"command": "photo.rate", "params": {"rating": 4}}}
+← {"id": 1, "ok": true, "result": null}
+← {"id": 2, "ok": false, "error": "unknown command `nope`"}
+```
+
+Requests are answered on the UI thread between frames (timeout 60 s).
+
+**Only requests are read.** Every line must be a JSON object with a string `method` (`id` and `params` are
+optional; blank lines are skipped). Anything else — text that isn't JSON, a JSON array or number, an object without
+`method`, invalid UTF-8, or a line longer than 4 MiB — gets one error reply
+(`{"ok": false, "error": "… closing the connection"}`) and the server **closes the connection**; nothing sent after
+it on that connection runs. This keeps an HTTP request (for example a web page's cross-origin `fetch` to
+`127.0.0.1:<port>`) from smuggling a command in its body: its request line is rejected first. Junk never reaches the
+UI thread, and at most 16 connections are served at once (further ones get an error line and are closed). Clients
+that hit an error reply should reconnect. The MCP server's connect
+mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
+`crates/ui-egui/src/control.rs` (methods) and `apps/lightcraft/src/control_server.rs` (transport).
+
+## Authentication
+
+Every connection must authenticate before anything else runs. Start the app with a token file, so the token is not
+visible in the process list:
+
+```sh
+lightcraft --control 7980 --control-token-file /private/path/lightcraft-control.token
+```
+
+If the file does not exist, LightCraft creates it with a fresh 256-bit token (64 hexadecimal characters); on Unix the
+new file is mode `0600`, on Windows protect it with a user-only ACL. An existing file is reused.
+`--control-token <64 hex>` passes the token directly instead. With neither, the app makes a token for this launch and
+prints it on standard error (it is never written to the log file). `LIGHTCRAFT_CONTROL_TOKEN_FILE` and
+`LIGHTCRAFT_CONTROL_TOKEN` are the environment equivalents. If the token can't be set up (a corrupt token file, both
+options given) there is no control server and the reason is logged.
+
+The first request on each connection must be:
+
+```text
+→ {"id": "auth", "method": "auth", "params": {"token": "<64 hexadecimal characters>"}}
+← {"id": "auth", "ok": true, "result": {"authenticated": true}}
+```
+
+Any other first request, or a wrong token, gets `{"ok": false, "error": "authentication required"}` and the connection
+is closed; nothing runs. A second `auth` on an authenticated connection gets
+`{"ok": false, "error": "already authenticated"}` and the connection keeps serving. A connection that has not authenticated within 10 seconds is closed, so idle connections cannot hold the 16 connection slots; once authenticated it may stay idle.
+`lightcraft-cli run --connect` and
+`lightcraft-cli mcp --connect` send it for you: give them the same `--control-token-file PATH` (or `--control-token`,
+or the environment variables); so does `docs/showcase/run.py`. The token is a bearer credential for the whole control
+surface, which can move, export and delete files: keep the file private and don't log or commit it.
+
+## File access
+
+Control requests read and write files only beneath two launch-time roots, as in PhotoCraft:
+
+```sh
+lightcraft --control 7980 --control-token-file /private/path/lightcraft-control.token \
+  --automation-read-root /work/photos --automation-write-root /work/out
+```
+
+`LIGHTCRAFT_AUTOMATION_READ_ROOT` and `LIGHTCRAFT_AUTOMATION_WRITE_ROOT` are the environment equivalents.
+Each root must be an existing folder; if one can't be opened there is no control server and the reason is
+logged. **Without roots, every file path in a control request is refused.** Commands that import, browse,
+open, load or install (`library.import`, `library.browse`, preset and profile imports, model installs, …)
+need the read root; commands that export, save, write, render or create (`app.export`, `ui.render`,
+`ui.screenshot`, `curve.exportPresets`, `folder.create`, …) the write root. Opening or creating a library,
+and any command whose direction isn't known, needs its paths beneath both.
+
+Paths are the values of `path`, `paths`, `folder`, `dir`, `destination`, `location`, `dataset`, of keys
+ending in `Path`, `Folder`, `Dir` or `Location`, and `parent` / `into` of the `folder.*` commands, at any
+depth of a command's parameters, plus any other string that looks absolute (`/…`, `\…`, `C:\…`, `~/…`,
+`file:…`) outside free-text fields such as `text`, `name` and `title`. Each is a `/`-separated path
+relative to the root, or an absolute path inside it. Refused before any file is touched: `..`, `.` and
+empty components, `\`, drive or stream prefixes (`:`), Windows device names, absolute paths outside the
+root, and paths that leave the root through a link (a link that doesn't resolve is refused too). The
+command gets the resolved absolute path. Without a `path`, `ui.screenshot` returns the PNG as
+`pngBase64`, and so does `ui.render {base64: true}`.
+
+Refused outright, because they write beside or move the library's photos wherever those are:
+`photo.moveToFolder`, `photo.convertToDng`, `photo.duplicate` and `photo.editExternal`. Edits still
+update the open library and, with XMP auto-write on, the photos' sidecars, wherever they are.
+
+The rules apply to every command a control request runs, UI commands such as `app.export` included,
+and to the menus, shortcuts and dialog buttons its synthetic input (`ui.clickWidget`, `ui.key`, …) sets
+off. Interactive use is not confined, nor are headless local runs (`lightcraft-cli run` without `--connect`,
+`snapshot`). The
+check and the file operation are two steps, so another local process that swaps a folder for a link in
+between is not stopped. Implementation: `crates/engine/src/automation_roots.rs` (applied in
+`Session::execute` and `LightcraftApp::run`).
+
+## Isolated automation profiles
+
+Set `LIGHTCRAFT_CONFIG_DIR` to a fresh directory to isolate UI preferences, app logs, the emergency
+panic log, the GPU initialization marker, camera profiles and default model folders. The nonempty
+value is used as the complete settings directory. Unset retains the normal platform paths; an explicit
+empty value disables the settings directory, while the emergency panic log retains its system-temp path.
+Explicit model-directory environment variables still take precedence over their defaults.
+Also pass `--library DIR` with a separate scratch library: the configuration override does not change
+the default photo-library location. Do not use `--memory` or `LIGHTCRAFT_NO_PREFS` when testing persistence.
+
+A native acceptance run must reject the stderr message `rendering headlessly`: `ui.screenshot`
+automatically uses the CPU fallback after two seconds without a presented frame. That fallback is useful
+for headless scripts, but cannot establish native-window acceptance. Control input injects egui events;
+it does not establish operating-system input delivery or screen-reader acceptance.
+
+On macOS, the native menu owns its keyboard accelerators. `ui.key` injects egui key events and
+does not synthesize the Cocoa menu events for those shortcuts. Use `ui.menu.invoke` with the
+command ID (for example `edit.undo`, `edit.redo`, `view.filmstrip` or `view.leftPanel`) to test
+their command behavior. That API invokes the app command dispatcher directly; it does not traverse
+Cocoa menu dispatch. Native menu activation and keyboard accelerator delivery require a separate test.
+
+Before capturing a finished Detail view, poll `ui.inspect` until the expected `loupe.photo` is active,
+`loupe.source` is `render` or `cached`, `loupe.pending` is false, and the render queues are empty.
+For the loupe, `cached` is a prior view render keyed by the current photo and develop settings;
+`thumb`, `small` and `embedded` are separate fallback sources. A presented frame can otherwise
+contain an in-progress rendering placeholder. Require loaded thumbnail textures only when the
+filmstrip is visible.
+
+## Methods
+
+| Method | Params | Result |
+|---|---|---|
+| `engine.execute` (alias `ui.menu.invoke`) | `{command, params?}` | Run any engine or UI command (see `engine.commands`) |
+| `engine.commands` | — | Engine + UI commands: id, label, menu, shortcut, params doc, enabled |
+| `ui.menu.list` | — | Menu entries (flat: id, label, menu path, shortcut, enabled) |
+| `ui.menu.tree` | — | The menu bar as shown (File … Help): items `{id, params?, label, shortcut?, enabled, checked?}`, separators, submenus — the model behind the native macOS menu bar and the in-window menus |
+| `ui.inspect` | — | UI state, window, `loupe` (`source`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: tasks that would be cut short are running — `button:quitAnyway` cancels them and quits, `button:quitCancel` keeps working — or unsaved changes: `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `activity` (every long-running task in flight as the activity stack in the top-left corner shows it, same shape as `activity.list`; a row appears once its task is 0.5 s old, ids `activity:row:<id>`, ✕ = `activity:cancel:<id>`, `activity:more` expands past 3 rows), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
+| `ui.widgets` | `{filter?}` | On-screen widgets `{id, rect: [x, y, w, h]}` (screen points) |
+| `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, button?, fx?, fy?}` (`button: "right"` right-clicks) / `{id, toX?, toY?, dx?, dy?, steps?}` / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews) |
+| `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points |
+| `ui.pointer` | `{events: [{kind: down\|drag\|up, x, y}], alt?, shift?, cmd?}` | Gesture in normalized image coordinates (Detail view) |
+| `ui.key` | `{key, cmd?, shift?, alt?, ctrl?}` | Key press |
+| `ui.text` | `{text}` | Text input |
+| `ui.clipboard` | `{action: cut\|copy\|paste, text?}` | Cut, copy or paste in the focused text field, as the system does for ⌘X / ⌘C / ⌘V; `paste` pastes `text`, or the system clipboard without it. Refused when no text field has the focus (outside one, ⌘C / ⌘V are the commands `develop.copy` / `develop.paste`). In the desktop app cut and copy write the system clipboard. `ui.inspect` → `copied` is the text the UI last put on the clipboard |
+| `ui.scroll` | `{dx, dy, cmd?, ctrl?, shift?, alt?}` | Wheel / two-finger scroll at the current pointer; pans over the image, modifier-scroll zooms |
+| `ui.zoom` | `{factor}` | Pinch zoom at the current pointer (positive scale multiplier; 1 = unchanged). Position it first with `ui.move` or `ui.hoverWidget` |
+| `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state |
+| `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog |
+| `ui.resize` | `{width, height}` | Resize the window |
+| `ui.zoomFactor` | `{factor}` | Set the interface scale (0.5–3; egui's zoom keys are off, Cmd+= / Cmd+- zoom the photo) |
+| `ui.screenshot` | `{path?, headless?}` | `{path, width, height}` (`path` beneath the write root; without one, `{width, height, pngBase64}`) once the frame (with finished renders) is captured. `headless: true` draws the UI on the CPU (no compositor needed); a windowed capture that gets no frame within 2 s falls back to headless automatically |
+| `engine.execute {command: "app.export", params}` | export params (see `docs/mcp.md`), plus `preset`, `dir` / `path` (beneath the write root, [File access](#file-access)), `ids`, `background` | Writes the files and returns `{files}` (one `{path, width, height, bytes, sidecars}` per file, plus `gpuFallback` — why that render fell back from the GPU to the CPU — when it did; see `docs/gpu-pipeline.md`); with `background: true` (what the Export dialog and menus use) it returns `{background: true, total}` at once and the batch runs on a worker thread — poll `ui.inspect` → `export` |
+| `engine.execute {command: "activity.list"}` | — | The long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first: `{tasks: [{id, kind, label, done, total, unit, detail, cancellable, cancelling, ageMs}]}`; `total` 0 = not known yet; `unit` is `count`, `bytes` or `percent`; `label` is English (the app shows it translated) |
+| `engine.execute {command: "activity.cancel"}` | `{id}` or `{all: true}` | Asks the task (or every cancellable one) to stop at its next file or photo → `{cancelled: n}`; an unknown id (it may have just finished) or a task that can't be cancelled is an error |
+| `ui.render` | `{id?, size?, path?, base64?}` | Render a photo (PNG to `path`, beneath the write root; or `pngBase64` with `base64: true`), `{width, height}` |
+| `app.quit` | — | Close the app |
+
+White balance (`develop.set` with `wb.temp` / `wb.tint`, `develop.wb`, `develop.wbPick`) is in Kelvin and tint on
+raws with colour matrices — in the file (DNG) or measured for the camera model (`lightcraft_raw::spectral`; issue
+#730) — where As Shot reads the file's as-shot white; rendered files and raws without matrices use a relative scale
+whose 6500 K / 0 is the as-shot look (the Edit panel shows it as −100..+100). The stored `wb` of such a Kelvin raw
+says `"scale": "kelvin"`; a partial settings JSON given to `develop.merge` or a preset whose `wb` sets `temp` / `tint`
+**without** `scale` keeps the relative meaning it always had (6500 = as shot) on every raw, so agents that mean
+Kelvin on a Kelvin raw pass `"scale": "kelvin"` or use `develop.set` / `develop.wb`.
+
+Image navigation is also available directly as the UI command `view.navigate`, with
+`{zoom?: "fit" | "fill" | {"percent": number}, pan?: [x, y]}`. Percentage zoom accepts fractional
+values greater than 0 and at most 800; pan is the normalized image centre, with coordinates from 0 to 1.
+Pinching keeps the image point under the pointer steady and zooms between Fit and 800%; two-finger
+scrolling pans in both axes and respects the operating system's scrolling direction and momentum.
+These gestures work in Detail (including editing tools and full-screen preview), Compare and Reference
+views, and only apply over their image areas. Panning stops at the image edges.
+
+The interface theme is `view.appearance {mode?: "auto" | "light" | "dark"}` (no mode: the next one,
+Auto → Light → Dark → Auto, like the top bar's `icon:appearance` button) and `view.theme {theme:
+"charcoal" | "midnight" | "silver" | "paper"}`, which picks a theme and fixes the mode to its family.
+Both reply `{mode, darkTheme, lightTheme}`; the same values are `settings.appearanceMode`,
+`settings.darkTheme` and `settings.lightTheme` in `ui.set`. Auto follows the system (on Linux the
+XDG desktop portal, watched for changes rather than polled) and is dark when the system says nothing.
+Mask brushing uses the UI command `tool.brush` through `engine.execute`. With `{}` it activates
+painting on the current mask. `{"new": true}` creates a separate brush mask; `{"op": "add"}` or
+`{"op": "subtract"}` appends a brush component to the selected mask. Creating either starts in
+paint mode with the overlay visible. Brush Erase (or Alt while painting) removes strokes' coverage
+within that brush component; it is distinct from subtracting the component from the whole mask.
+
+### When the library can't be saved
+
+With a persistent library, every command that changes something is written to the catalog journal (fsynced) before
+it replies. If that write fails (disk full, volume gone, permissions), the command replies `ok: false` with
+`"saved in memory but not written to disk: <reason>; LightCraft will retry"`. The change itself **is** applied (and
+undoable) and stays queued: the next command, and the app's frame loop every couple of seconds, retry the write, so
+nothing is lost once the disk is writable again — unless the app quits first. Meanwhile `ui.inspect` → `unsaved`
+is `{ops, error}` (else `null`), `library.info` reports `unsavedOps` / `unsavedError`, and the top bar's cloud icon
+shows a warning (widget `indicator:unsaved`). Queries and commands that change nothing still succeed. A failed
+compaction (snapshot) is not a failed command — the log is kept whole — and only shows in `library.info` →
+`lastError`.
+
+### When the library can't be opened
+
+If the desktop app can't open its library at launch (another program has it open, an unreadable or newer-format
+catalog, a missing drive), the session starts empty and in memory — never with demo photos — and a window asks what
+to do: `ui.inspect` → `libraryProblem` is `{path, error, temporarySession, pendingImport}` (else `null`); its buttons
+are `button:libraryRetry`, `button:libraryChoose`, `button:libraryTemporary` (Continue Without Saving) and
+`button:libraryQuit`. A temporary session shows a banner (`indicator:temporarySession`, `button:libraryReopen`) and
+writes nothing. `app.openLibrary` opening a library ends it.
+
+### Open Library on a Lightroom catalog
+
+`app.openLibrary` never makes a LightCraft library inside a Lightroom Classic catalog (issue #891): given the catalog
+folder (it holds a `*.lrcat`), one of its `*.lrdata` / `*.lrcat-data` folders or `Backups/`, the `.lrcat` itself or
+its `-wal` / `-shm` / `.lock` files, it keeps the library open now and returns `{opened: false, lightroomCatalog:
+<the .lrcat found, or null>, path}`; the window shows a dialog whose `button:dialogOk` (Import Lightroom Catalog…, or
+`ui.dialog.confirm`) runs `file.importLightroom` with that catalog (no catalog found: it asks for one) and
+`button:dialogCancel` (`ui.dialog.cancel`) does nothing. A folder that is a LightCraft library (`catalog.snap` / `catalog.log`) always
+opens as one. With no library open (the library problem window) it is an error instead. The engine refuses the same
+places (`EngineError::LightroomCatalog`, so `lightcraft-cli --library` and `mcp --library` too). `library.importLightroom
+{status: true}` reports the catalog's `path` after the task ends as well as while it runs.
+
+## Headless rendering (no window, no GPU)
+
+The egui UI can be rasterized on the CPU (`crates/ui-egui/src/softpaint.rs`, driven by
+`crates/ui-egui/src/headless.rs`): same tessellation, gamma-space premultiplied blending and
+scissor clipping as egui's GPU backends, so the image matches the window (minus GPU dithering).
+
+- **In the running app:** `{"method": "ui.screenshot", "params": {"path": "a.png", "headless": true}}`.
+  The UI is drawn into an offscreen context from the app's logic tick, which keeps running when the
+  window is occluded or the display sleeps/locks. Windowed screenshots fall back to this after 2 s.
+- **Without any app window:** `lightcraft-cli snapshot` runs a whole app session headlessly.
+  Photo development also defaults to the CPU, so the initial frames do not discover a GPU adapter
+  or load a graphics driver. `LIGHTCRAFT_GPU=1` does not opt snapshots back into GPU rendering.
+  This applies only to the snapshot session: even `--library DIR` leaves the desktop app's saved
+  `ui.json` preferences untouched. It answers the same control requests (same handler) from a JSON-lines script:
+
+```text
+lightcraft-cli snapshot --demo -o grid.png --size 1600x1000 [--scale 2]
+lightcraft-cli snapshot --library DIR --script tour.jsonl -o shot.png
+```
+
+Headless screenshot dimensions must be finite and at least one logical point, with a finite,
+positive scale. Rounded output must be at least one pixel per edge, at most 16,384 pixels
+per edge and 64 million pixels in total. `snapshot` and `ui.resize` reject requests outside
+these limits before layout or rasterization; supplied resize dimensions must be numbers.
+An interface zoom (egui's zoom factor; the keyboard never changes it — ⌘= / ⌘− / ⌘0 zoom the
+photo, issue #566) changes text and control sizes while preserving the snapshot viewport's requested
+physical pixel dimensions. Later `ui.resize` requests use current egui points; validation
+and rasterization both convert them to native viewport points before rounding the output
+pixels. A native edge below one point after zooming out is valid if it rounds to at least
+one pixel.
+
+  `tour.jsonl` holds one request per line (`#` comments allowed), e.g.
+  `{"method": "ui.set", "params": {"view": "detail", "right": "edit", "openSections": ["optics"]}}`
+  then `{"method": "ui.screenshot"}`. Replies are printed to stdout. A failed request
+  (`"ok": false`) does not stop the script — the remaining lines and the final screenshot still
+  run — but the exit status is non-zero when any request failed, as with `run --keep-going`, so
+  CI and nightly runs can judge a snapshot by its exit status. A `ui.screenshot` without
+  `path` writes `-o` (then `OUT-2.png`, `OUT-3.png`, …); `ui.settle {timeoutMs?}` waits until no
+  renders are in flight. Each request runs frames until it is answered and its injected input
+  (clicks, keys, drags) has played out. Widget ids for `ui.clickWidget` come from `ui.widgets`
+  (e.g. `button:upright-auto`). A 1600×1000 demo snapshot takes ~1–2 s (debug build).
+
+## Panel docking
+
+Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. The document/session view is protected. Layouts, active tabs, panel visibility, and floating rectangles are saved with the app's existing UI preferences. These operations do not edit document contents.
+
+Panel IDs: `library`, `tools`, `presets`. The protected center is `canvas`.
+
+`ui.dock` accepts `operation` and `panel`. Operations are `open`, `close`, `activate`, `float` (with finite positive `rect: [x, y, width, height]`), or `move` (with `target` and `zone: center|left|right|top|bottom`). Center groups with the target; side zones split beside it. `ui.dock.reset` restores the default arrangement. Invalid moves return an error without changing the layout.
+
+Invoke these UI commands through `engine.execute`, for example `{"command":"ui.dock","params":{"operation":"float","panel":"tools","rect":[100,100,320,440]}}`.
+
+Advanced `ui.dock` operations use the same validated transaction as pointer gestures:
+`moveFloating` updates `rect`, `resizeSplit` accepts a boolean child `path` and
+`size` (`{"Ratio":0.5}`, `{"FixedFirst":280}`, or `{"FixedSecond":280}`),
+`setStackOpen` takes `open`, and `resizeStack` takes a point `height` or null.
+A center `move` can include `before` (panel ID or null to append) for tab order.
+The equivalent `{"action": ...}` form accepts a serialized shared docking action;
+this is also the form emitted by the renderer. Protected-canvas and app-specific panel
+rules apply equally to both forms.

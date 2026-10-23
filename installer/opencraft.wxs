@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  OpenCraft Studio bundle (WiX v5 Burn): one setup.exe that installs any of the craft apps. Built by
+  build.ps1, which passes the apps it found an MSI for:
+
+    wix build opencraft.wxs -arch x64 -ext WixToolset.BootstrapperApplications.wixext/5.0.2
+      -d Version=2026.10.21.735 -d Apps="cadcraft;photocraft" -d MsiDir=... -d IconPath=... -d LogoPath=...
+
+  Each app's own MSI is chained unchanged (so it keeps its file associations, shortcuts and
+  upgrade code, and shows in Apps & features on its own). The first page has a checkbox per app
+  (theme.xml), bound to the Burn variable Install_<app>, which is that package's InstallCondition.
+  Running setup again opens the Modify page with the same boxes, remembered from last time: tick an
+  app and Apply to add it, untick it to remove it.
+
+  Silent: `setup.exe /quiet Install_filmcraft=0 Install_effectcraft=0` installs all but those two.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle Name="OpenCraft Studio" Manufacturer="SoloDevTH" Version="$(var.Version)"
+      UpgradeCode="6A893ADC-F265-4E28-95D5-17C328752B60" IconSourceFile="$(var.IconPath)"
+      AboutUrl="https://github.com/SoloDevTH/OpenCraftTH" HelpUrl="https://github.com/SoloDevTH/OpenCraftTH">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl=""
+          ThemeFile="$(sys.SOURCEFILEDIR)theme.xml" LogoFile="$(var.LogoPath)" SuppressOptionsUI="yes" />
+    </BootstrapperApplication>
+
+    <?foreach App in $(var.Apps)?>
+    <!-- Has_<app> shows the app's checkbox; apps left out of this build have none. -->
+    <Variable Name="Has_$(var.App)" Type="numeric" Value="1" />
+    <Variable Name="Install_$(var.App)" Type="numeric" Value="1" Persisted="yes" bal:Overridable="yes" />
+    <?endforeach?>
+
+    <Chain>
+      <?foreach App in $(var.Apps)?>
+      <MsiPackage Id="$(var.App)" SourceFile="$(var.MsiDir)\$(var.App).msi" Visible="yes"
+          InstallCondition="Install_$(var.App) = 1" />
+      <?endforeach?>
+    </Chain>
+  </Bundle>
+</Wix>
